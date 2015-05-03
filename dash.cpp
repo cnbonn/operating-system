@@ -81,14 +81,13 @@ int parse_system( string input );
 int systat();
 
 //Shared Memory [External File]
-extern id create_shm( int shmkey , int mail_count , int mail_size ,
-                      void* &address );
-extern void del_shm( id id , void *addr );
-extern istream & write_shm( istream &in , void *address , int box , int size );
-extern ostream & read_shm( ostream &out , void *address , int box , int size );
-extern void copy_shm( void *address , int source , int dest , int size );
+id create_shm( int shmkey , int mail_count , int mail_size , void* &address );
+void del_shm( id id , void *addr );
+istream & write_shm( istream &in , void *address , int box , int size , id id );
+ostream & read_shm( ostream &out , void *address , int box , int size , id id );
+void copy_shm( void *address , int source , int dest , int size , id id );
 
-void mbox_help();
+void mbox_help();//Local
 
 
 //*********************************MAIN**************************************//
@@ -333,7 +332,7 @@ int main_loop( int argc , char* argv[], fstream &f )
                     break;
                 }
                 if( box && box <= mail_count )
-                    write_shm( cin , addr , box-1 , mail_size );
+                    write_shm( cin , addr , box-1 , mail_size , id );
                 else
                     cout << "Mailbox number specified is invalid." << endl;
                 box = 0;
@@ -349,7 +348,7 @@ int main_loop( int argc , char* argv[], fstream &f )
                     break;
                 }
                 if( box && box <= mail_count )
-                    read_shm( cout , addr , box-1 , mail_size );
+                    read_shm( cout , addr , box-1 , mail_size , id );
                 else
                     cout << "Mailbox number specified is invalid." << endl;
                 break;
@@ -367,7 +366,7 @@ int main_loop( int argc , char* argv[], fstream &f )
                 }*/
                 if( source && dest &&
                     source <= mail_count && dest <= mail_count )
-                    copy_shm( addr , source-1 , dest-1 , mail_size );
+                    copy_shm( addr , source-1 , dest-1 , mail_size , id );
                 else
                     cout << "One or more mailboxes specified is invalid."
                          << endl;
