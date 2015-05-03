@@ -1,11 +1,11 @@
 CC = g++
 LIBS = 
 FLAGS = 
-EXECS = dash 
+EXECS = sim 
 
 all: $(EXECS)
 
-dash: prog1.cpp
+sim: main.cpp
 	$(CC) $(FLAGS) -o $@ $? $(LIBS) 
 
 clean:
