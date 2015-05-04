@@ -25,21 +25,34 @@ using namespace std;
 //Shared Memory
 id create_shm( int shmkey , int mail_count , int mail_size , void* &address );
 void del_shm( id id , void *addr );
-istream & write_shm( istream &in , void *address , int box , int size , id id );
-ostream & read_shm( ostream &out , void *address , int box , int size , id id );
-void copy_shm( void *address , int source , int dest , int size , id id );
+istream & write_shm( istream &in , void *address , int box ,
+                     int size , id &id );
+ostream & read_shm( ostream &out , void *address , int box ,
+                    int size , id &id );
+void copy_shm( void *address , int source , int dest , int size , id &id );
+int attach_nonlocalshm( int shmkey , void* &address , id &id ,
+                        int &mail_count , int &mail_size );
 
 //Semaphores
-int sema_create( int boxes );
-int sema_clear( id id , int box);
-int sema_set( id id , int box);
-int sema_del( int smid );
+int sema_create( int shmkey , int boxes );
+int sema_clear( id &id , int box);
+int sema_set( id &id , int box);
+void sema_del( int smid );
 
 //***************************************************************************//
 //create_shm                                                                 //
-//Purpose:   
-//Arguments: 
-//Returns:   
+//Purpose:   Sets up the shared memory segment based on set parameters.      //
+//  Allocates a space of mail_count(#of boxes) * mail_size(size of each box) //
+//  The size of each box is in KB. May be passed a shmkey to use for set up. //
+//  Currently dash.cpp always passes shmkey = 1066                           // 
+//Arguments: int shmkey: Can be anything, currently only ever passed 1066    //
+//           int mail_count: # of mailboxes to create                        //
+//           int mail_size: Size of each mailbox in KB                       //
+//           void& &address: Void Point to start of shared memory location.  //
+//Returns:   id: struct containing:                                          //
+//              id.shm: Shared Memory ID        AND     id.sem: Semaphore ID //
+//References: void* &address: Passed back to calling function for later.     //
+//Known Errors: None.                                                        //
 //***************************************************************************//
 id create_shm( int shmkey , int mail_count , int mail_size , void* &address )
 {
@@ -47,7 +60,7 @@ id create_shm( int shmkey , int mail_count , int mail_size , void* &address )
     id id;                      //Stores Semaphore and Shared Memory ID #s
 
     //Set up Semaphores first
-    id.sem = sema_create( mail_count );
+    id.sem = sema_create( shmkey , mail_count );
 
     if( id.sem == 0 )
     {
@@ -91,7 +104,7 @@ id create_shm( int shmkey , int mail_count , int mail_size , void* &address )
 //           void *addr: The void pointer to the start of the shared memory. //
 //Returns:   VOID.                                                           //
 //***************************************************************************//
-void del_shm( id id , void *addr )
+void del_shm( id &id , void *addr )
 {
     shmdt( addr );                   //Detach the current process from shared
     shmctl( id.shm , IPC_RMID , 0 ); //Marks shared memory segment for deletion
@@ -107,10 +120,11 @@ void del_shm( id id , void *addr )
 //           void *addr: Void pointer to start of shared memory address.     //
 //           int box: The mail box number in shared memory we are writing to.//
 //           int size: The size (in kilobytes) of each mailbox.              //
+//           id &id: struct containing shared memory and semaphore IDs.      //
 //Returns: ifstream &: Returns the input file stream for continued reading if//
 //      it is desired.                                                       //   
 //***************************************************************************//
-istream & write_shm( istream &in , void *address , int box , int size , id id )
+istream & write_shm( istream &in , void *address , int box , int size , id &id )
 {
     //Local Variable Declaration
     string buffer;
@@ -121,24 +135,28 @@ istream & write_shm( istream &in , void *address , int box , int size , id id )
     char *addr = (char*)address;
 
     //Check the state of the semaphore
-    if ( semctl( id , box , GETVAL , 0 ) == 0 ) 
+    if ( semctl( id.sem , box , GETVAL , 0 ) ) 
     {
-        cout << "ERROR: Coult not lock Semaphore " << box << " for mailbox"
-             << " write command. Write Terminated." << endl;
+        cout << "ERROR: Could not lock Semaphore " << box+1 
+             << " for mailbox write command. Write Terminated" << endl;
         return in;
     }
 
     //Set semaphore
     if( sema_set( id , box ) )
     {
-        cout << "Failed to set semaphore for box: " << box << endl
+        cout << "Failed to set semaphore for box: " << box+1 << endl
              << "Write Terminated." << endl;
     }
 
+    //Clear the first enter for command from input stream
+    in.ignore( 1 );
+
     //Read into buffer until end of input or capacity reached
-    while( getline( in , buffer ) )
+    while( in.good() )
     {
-        if( in.eof() )
+        getline( in , buffer );
+        if( buffer.length() == 0 )
         {
             break;
         }
@@ -164,6 +182,8 @@ istream & write_shm( istream &in , void *address , int box , int size , id id )
     //NULL terminate data if we did not reach mailbox capacity
     if( !trunc )
         addr[ (box*size) + i+1 ] = '\0';
+    if( data[data.length()-1] == '\n' )
+        addr[ (box*size)+data.length()-1 ] = '\0';
 
     //Clear Semaphore
     if( sema_clear( id , box ) )
@@ -178,12 +198,16 @@ istream & write_shm( istream &in , void *address , int box , int size , id id )
 }
 
 //***************************************************************************//
-//read_shm
-//Purpose:   
-//Arguments: 
-//Returns:   
+//read_shm                                                                   //
+//Purpose:   Read the specified shared memory box until NULL/EOF/End of box. //
+//Arguments: ostream &out: Output stream to display box contents to.         //
+//           void *address: Pointer to start of shared memory location.      //
+//           int box: Mailbox number to read.                                //
+//           int size: Size of each mailbox in KB.                           //
+//           id &id: struct containing shared memory and semaphore IDs.      //
+//Returns:   ostream &: For continued use of out if desired.                 //
 //***************************************************************************//
-ostream & read_shm( ostream &out , void *address , int box , int size , id id )
+ostream & read_shm( ostream &out , void *address , int box , int size , id &id )
 {
     //Local Variable Declaration
     int i = 0;
@@ -191,17 +215,17 @@ ostream & read_shm( ostream &out , void *address , int box , int size , id id )
     char *addr = (char*)address;
 
     //Check the state of the semaphore
-    if ( semctl( id , box , GETVAL , 0 ) == 0 ) 
+    if ( semctl( id.sem , box , GETVAL , 0 ) ) 
     {
-        cout << "ERROR: Coult not lock Semaphore " << box << " for mailbox"
-             << " read command. Read Terminated." << endl;
+        cout << "ERROR: Semaphore not unlocked for box: " << box+1
+             << " Read Terminated." << endl;
         return out;
     }
 
     //Set semaphore
     if( sema_set( id , box ) )
     {
-        cout << "Failed to set semaphore for box: " << box << endl
+        cout << "Failed to lock semaphore for box: " << box << endl
              << "Read Terminated." << endl;
     }
 
@@ -235,7 +259,7 @@ ostream & read_shm( ostream &out , void *address , int box , int size , id id )
 //Returns:   Void. Function assumes caller gave it valid indexes for boxes   //
 //           and correct size.                                               //
 //***************************************************************************//
-void copy_shm( void *address , int source , int dest , int size , id id )
+void copy_shm( void *address , int source , int dest , int size , id &id )
 {
     //Local Variable Declaration
     char *addr = (char*)address;
@@ -247,12 +271,49 @@ void copy_shm( void *address , int source , int dest , int size , id id )
 }
 
 //***************************************************************************//
-//sema_create
-//Purpose:   
-//Arguments: 
-//Returns:   
+//attach_nonlocalshm                                                         //
+//Purpose:   Attach to a shared memory segment with shmkey that this process //
+//      did not personally create.                                           //
+//Arguments: int shmkey: The key to use to search for a shared memory segment//
+//           void * &address: Address of shared memory if found.             //
+//           id &id: Struct containing shared mem and semaphore IDs if found.//
+//           int &mail_count: Pass back the number of mailboxes found in seg //
+//           int &mail_size: Pass back the size of mailboxes found in seg    //
+//Returns:   int: -1: FAILURE, no shared memory segment or semaphores found. //
+//                 0: SUCCESS, accessed and attached.                        //
 //***************************************************************************//
-int sema_create( int boxes )
+int attach_nonlocalshm( int shmkey , void* &address , id &id ,
+                        int &mail_count , int &mail_size )
+{
+    id.shm = shmget( shmkey , 0 , 0666);//Find memory segment
+    if( id.shm == -1 )//No shared memory segment found
+    {
+        id.shm = 0; id.sem = 0;
+        return -1;
+    }
+    address = shmat( id.shm , 0 , 0 );//Attach to segment
+    mail_count = ((int*)address)[0];
+    mail_size = ((int*)address)[1];
+
+    id.sem = semget( shmkey , 0 , 0666 );//Find semaphores
+    if( id.sem == -1 )
+    {
+        id.shm = 0; id.sem = 0;
+        return -1;
+    }
+
+    return 0;
+}
+
+//***************************************************************************//
+//sema_create                                                                //
+//Purpose:   Create semaphores for all mailboxes in shared memory.           //
+//Arguments: int shmkey: The shared memory key we are creating semaphore for.//
+//           int boxes: The number of mailboxes that need a semaphore.       //
+//Returns:   int: 0: Failed to create semaphores.                            //
+//                #: The semaphore ID for created semaphores.                //
+//***************************************************************************//
+int sema_create( int shmkey , int boxes )
 {
     //Local Variable Declaration
     int semid;
@@ -263,7 +324,7 @@ int sema_create( int boxes )
     //Semget using IPC_Private allows computer to pick a key to use to give
     //us the desired number (=boxes) of semaphores. Using flags CREATE
     //and EXCLUSIVE and permissions 0666
-    semid = semget( IPC_PRIVATE , boxes , IPC_CREAT|IPC_EXCL|0666 );
+    semid = semget( shmkey , boxes , IPC_CREAT|IPC_EXCL|0666 );
 
     if( semid == -1 )
     {
@@ -281,40 +342,43 @@ int sema_create( int boxes )
             cout << "Cannot initialize semaphore." << endl;
             return 0;
         }
-        cout << "Value of semaphore at index " << k
-             << " is: " << semctl( semid , k , GETVAL , 0 ) << endl;
     }
 
     return semid;
 }
 
 //***************************************************************************//
-//
-//Purpose:   
-//Arguments: 
-//Returns:   
+//sema_del                                                                   //
+//Purpose:   Mark the created semaphores for destruction.                    //
+//Arguments: int semid: The semaphore ID to mark for destruction.            //
+//Returns:   VOID.                                                           //
 //***************************************************************************//
-int sema_del( int semid )
+void sema_del( int semid )
 {
     semctl( semid, 0, IPC_RMID, 0);
 }
 
 //***************************************************************************//
-//
-//Purpose:   
-//Arguments: 
-//Returns:   
+//sema_set                                                                   //
+//Purpose:   Set the semaphore for the given box # so no one may access it.  //
+//Arguments: id &id: Struct containing the shared memory and semaphore IDs.  //
+//           int box: The semaphore for the box to set.                      //
+//Returns:   int -1: FAILED! Could not lock semaphore.                       //
+//           int 0:  SUCCESS, semaphore locked.                              //
 //***************************************************************************//
-int sema_set( id id , int box )
+int sema_set( id &id , int box )
 {
     struct sembuf lock;
+    int sem_value = 0;
 
     //Lock Semaphore
     lock.sem_num = box;         //semaphore index
-    lock.sem_op = -1;           //the operation
+    lock.sem_op = 1;            //the operation
     lock.sem_flg = IPC_NOWAIT;  //operation flags
 
-    if( opid = semop(id, &lock, 1) == -1 )//Perform lock and check success
+    sem_value = semop( id.sem , &lock , 1 );//Lock
+
+    if( sem_value == -1 )//Check success
     {
         cout << "Cannot lock Semaphore" << endl;
         return -1;
@@ -323,26 +387,30 @@ int sema_set( id id , int box )
 }
 
 //***************************************************************************//
-//
-//Purpose:   
-//Arguments: 
-//Returns:   
+//sema_clear                                                                 //
+//Purpose:   Clear the semaphore for the given box # so it may be accessed.  //
+//Arguments: id &id: Struct containing the shared memory and semaphore IDs.  //
+//           int box: The semaphore for the box to clear.                    //
+//Returns:   int -1: FAILED! Could not unlock semaphore.                     //
+//           int 0:  SUCCESS, semaphore unlocked.                            //
 //***************************************************************************//
-int sema_clear( id id , int box)
+int sema_clear( id &id , int box )
 {
     struct sembuf lock; 
+    int sem_value = 0;
 
     //Unlock Semaphore
     lock.sem_num = box;         //semaphore index
-    lock.sem_op = 1;            //the operation
+    lock.sem_op = -1;           //the operation
     lock.sem_flg = IPC_NOWAIT;  //operation flags
 
-    if( semop(id, &lock, 1) == -1 )//Perform unlock and check success
+    sem_value = semop( id.sem , &lock , 1 );//Unlock
+
+    if( sem_value == -1 )//Check Success
     {
         cout << "Cannot unlock Semaphore" << endl;
         return -1;
     }
-    cout << "Sem " << box << ": " << semctl( semid , box , GETVAL , options );
     return 0;
 }
 

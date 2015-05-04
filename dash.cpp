@@ -1,8 +1,10 @@
-//*********************************dash2*************************************//
-//Program:     dash2                                                         //
+//*********************************dash3*************************************//
+//Program:     dash3                                                         //
 //Author:      Erik S. Lunde                                                 //
 //Instructor:  C. Karlsson                                                   //
 //Course:      CSC456 Operating Systems                                      //
+//Dependant Files: shm.cpp                                                   //
+//                  Required for all Version 3 functionality.                //
 //Description: Runs specific commands for retrieving system information and  //
 //             process information. (See below).                             //
 //             -help                                                         //
@@ -32,19 +34,41 @@
 //             -signal <signal_num> <pid>                                    //
 //                Sends a signal of signal_num to pid. Process will have to  //
 //                catch and display all received signals.                    //
-//PIPELINES - Unimplemented.
-//
-//New Features in 3:
-//
+//                Signal command is not yet implemented.                     //
+//PIPELINES - Not yet implemented.                                           //
 //                                                                           //
-//Author Notes: The algorithm library could easily be removed. Is only used  //
+//New Features in 3:                                                         //
+//              mboxinit <#of boxes> <size of box in KB>                     //
+//                  Initializes a shared memory block of Boxes+1*size        //
+//                  Deletes any previously initialized shared memory if      //
+//                  called twice.                                            //
+//              mboxwrite <box #>                                            //
+//                  Begins reading from console input into mailbox #         //
+//              mboxread <box #>                                             //
+//                  Reads all contents of a mailbux until NULL/EOF/End of box//
+//              mboxcopy <source> <destination>                              //
+//                  Replaces contents of destination with copy of source box //
+//              mboxdel                                                      //
+//                  Marks current segment for destruction.                   //
+//              mboxhelp                                                     //
+//                  Displays help menu for mailboxes.                        //
+//                                                                           //
+//Author Notes: Broken down by version.                                      //
+//1:The algorithm library could easily be removed. Is only used              //
 //  for the transform function. A lazy way to convert input to lower case    //
 //  quickly without the use of a loop and tolower() function calls.          //
+//                                                                           //
+//2:Pipelines are unimplemented but system commands will still execute.      //
+//                                                                           //
+//3:Shared Memory Key used currently is ALWAYS constant. This is to more     //
+//  easily find shared memory from an outside process. (rather than using the//
+//  currently running PID of the process which set up the shared memory.     //
 //                                                                           //  
 //Planned Features:                                                          //
 //Command Line Arguments: The program currently ignores command line args.   //
 //  all commands must be entered while program is running.                   //
-//Known Bugs:
+//Known Bugs: Pipelines do not function.                                     //
+//          Next Bug here!
 //***************************************************************************//
 
 //Pre-processor declarations//
@@ -80,14 +104,20 @@ int parse_system( string input );
 //Systat Function
 int systat();
 
-//Shared Memory [External File]
-id create_shm( int shmkey , int mail_count , int mail_size , void* &address );
-void del_shm( id id , void *addr );
-istream & write_shm( istream &in , void *address , int box , int size , id id );
-ostream & read_shm( ostream &out , void *address , int box , int size , id id );
-void copy_shm( void *address , int source , int dest , int size , id id );
+//Shared Memory [External File][shm.cpp]
+extern id create_shm( int shmkey , int mail_count , int mail_size ,
+                      void* &address );
+extern void del_shm( id &id , void *addr );
+extern istream & write_shm( istream &in , void *address , int box ,
+                     int size , id &id );
+extern ostream & read_shm( ostream &out , void *address , int box ,
+                    int size , id &id );
+extern void copy_shm( void *address , int source , int dest ,
+                      int size , id &id );
+extern int attach_nonlocalshm( int shmkey , void* &address , id &id ,
+                        int &mail_count , int &mail_size );
 
-void mbox_help();//Local
+void mbox_help();//Local File
 
 
 //*********************************MAIN**************************************//
@@ -289,15 +319,6 @@ int main_loop( int argc , char* argv[], fstream &f )
                          << endl;
                     break;
                 }
-
-                //Only one shared memory may be created at a time.
-                /*if( id.shm )
-                {
-                    cout << "Mailboxes already initialized. Command Ignored." 
-                         << endl;
-                    break;
-                }*/
-
                 //Create shared memory based on current process ID, increment
                 //until valid shared space is created.
                 /* Set shared memory key 1066 used instead, DEPRECATED
@@ -307,7 +328,13 @@ int main_loop( int argc , char* argv[], fstream &f )
                 { cout <<"loop test" << endl; }
                 shmid = getpid()+i;
                 */
-                id = create_shm( shmkey , mail_count , mail_size , addr );
+                if( id.shm != 0 )//Check if memory has already been made
+                {
+                    cout << "Destroying old segment." << endl;
+                    del_shm( id , addr );//If so, delete old, make new!
+                }
+                id = create_shm( shmkey , mail_count+1 , mail_size , addr );
+                ((int*)addr)[0] = mail_count; ((int*)addr)[1] = mail_size;
                 break;
 
             case 10: //mailbox delete
@@ -322,17 +349,19 @@ int main_loop( int argc , char* argv[], fstream &f )
                 break;
 
             case 11: //mailbox write
-                cout << "Mailbox write command received. TESTING" << endl;
                 cin >> input;
                 box = atoi( input.c_str() );
 
-                if ( id.shm == 0 )
+                //Check for segment not made by this process
+                if( id.shm == 0 && 
+                    attach_nonlocalshm( shmkey , addr , id ,
+                                        mail_count , mail_size ) )
                 {
-                    cout << "No Shared Memory has been set up yet!" << endl;
+                    cout << "No Shared Memory has been set up yet." << endl;
                     break;
                 }
                 if( box && box <= mail_count )
-                    write_shm( cin , addr , box-1 , mail_size , id );
+                    write_shm( cin , addr , box , mail_size , id );
                 else
                     cout << "Mailbox number specified is invalid." << endl;
                 box = 0;
@@ -342,31 +371,36 @@ int main_loop( int argc , char* argv[], fstream &f )
                 cin >> input;
                 box = atoi( input.c_str() );
 
-                if ( id.shm == 0 )
+                //Check for segment not made by this process
+                if ( id.shm == 0 && 
+                    attach_nonlocalshm( shmkey , addr , id ,
+                                        mail_count , mail_size ) )
                 {
-                    cout << "No Shared Memory has been set up yet!" << endl;
+                    cout << "No Shared Memory has been set up yet." << endl;
                     break;
                 }
                 if( box && box <= mail_count )
-                    read_shm( cout , addr , box-1 , mail_size , id );
+                    read_shm( cout , addr , box , mail_size , id );
                 else
                     cout << "Mailbox number specified is invalid." << endl;
                 break;
 
             case 13: //mailbox copy
-                cout << "Mailbox copy command received. TESTING" << endl;
                 cin >> input;
                 source = atoi( input.c_str() );
                 cin >> input;
                 dest = atoi( input.c_str() );
 
-                /*if( !addr )
+                //Check for segment not made by this process
+                if( id.shm == 0 && 
+                    attach_nonlocalshm( shmkey , addr , id ,
+                                        mail_count , mail_size ) )
                 {
-                    addr = shmat( id.shm , 0 , 0 );
-                }*/
+                    cout << "No Shared Memory located." << endl;
+                }
                 if( source && dest &&
                     source <= mail_count && dest <= mail_count )
-                    copy_shm( addr , source-1 , dest-1 , mail_size , id );
+                    copy_shm( addr , source , dest , mail_size , id );
                 else
                     cout << "One or more mailboxes specified is invalid."
                          << endl;
@@ -410,6 +444,15 @@ int main_loop( int argc , char* argv[], fstream &f )
 //          4: CMDMN command received. Parse for ID on return.               //
 //          5: help command received. Output help menu on return.            //
 //          6: User entered another command, run as system command in pipe.  //
+//          7: signal command received. Not yet implemented.                 //
+//          8: piping command received. Not yet implemented.                 //
+//          9: mboxinit command received. Set up Shared Memory location.     //
+//          10:mboxdel command received. Destroy Shared Memory location.     //
+//          11:mboxwrite command received. Write to following mailbox number.//
+//          12:mboxread command received. Read following mailbox number.     //
+//          13:mboxcopy command received. <source> <dest> to follow.         //
+//          14:mboxhelp command received. Display help menu for mailboxes.   //
+//          256: ERROR, No valid string detected. SHOULD NOT HAPPEN!         //
 //Author Notes: Will only accept commands at the start of the input string   //
 //  which match exactly to specific commands. Does not parse additional args.//
 //***************************************************************************//
@@ -711,7 +754,7 @@ void help_menu()
     cout << "cd <path>" << endl <<
     "    Attempts to change the current working directory." << endl;
     cout << "signal <signal_num> <pid>" << endl <<
-    "    Sends signal of <signal_num>, to process ID <pid>" << endl;
+    "    Sends signal of <signal_num>, to process ID <pid>" << endl << endl;
 
     //Other Help Sections
     mbox_help();
@@ -719,11 +762,22 @@ void help_menu()
 
 //***************************************************************************//
 //mbox_help()                                                                //
-//Purpose:   
+//Purpose:   Outputs the help menu for mailbox usage.                        //
 //Arguments: None.                                                           //
 //Returns:   Void.                                                           //
 //***************************************************************************//
 void mbox_help()
 {
-    cout << "FILL THIS MENU IN!" << endl;
+    cout << "mboxinit <#of boxes> <size of box in KB>" << endl <<
+    "    Initializes a shared memory block of Boxes+1*size" << endl <<
+    "    Deletes any preciously initialized shared memory if called twice."
+         << endl;
+    cout << "mboxwrite <box #>" << endl <<
+    "    Begins reading from console input into box #" << endl;
+    cout << "mboxread <box#>" << endl <<
+    "    Reads all contents of a mailbux until NULL/EOF/End of box" << endl;
+    cout << "mboxcopy <source> <destination>" << endl <<
+    "    Replaces contents of destination with copy of source box" << endl;
+    cout << "mboxdel" << endl <<
+    "    Marks current segment for destruction." << endl << endl;
 }
