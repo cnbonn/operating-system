@@ -275,7 +275,7 @@ void copy_shm( void *address , int source , int dest , int size , id &id )
     //Set source semaphore
     if( sema_set( id , source ) )
     {
-        cout << "Failed to lock semaphore for box: " << box << endl
+        cout << "Failed to lock semaphore for box: " << source << endl
              << "Copy Terminated." << endl;
         return;
     }
@@ -283,7 +283,7 @@ void copy_shm( void *address , int source , int dest , int size , id &id )
     //Check the state of the destination semaphore
     if ( semctl( id.sem , dest , GETVAL , 0 ) ) 
     {
-        cout << "ERROR: Semaphore not unlocked for box: " << box << endl
+        cout << "ERROR: Semaphore not unlocked for box: " << dest << endl
              << "Copy Terminated." << endl;
         return;
     }
