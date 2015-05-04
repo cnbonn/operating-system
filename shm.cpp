@@ -137,7 +137,7 @@ istream & write_shm( istream &in , void *address , int box , int size , id &id )
     //Check the state of the semaphore
     if ( semctl( id.sem , box , GETVAL , 0 ) ) 
     {
-        cout << "ERROR: Could not lock Semaphore " << box+1 
+        cout << "ERROR: Could not lock Semaphore " << box 
              << " for mailbox write command. Write Terminated" << endl;
         return in;
     }
@@ -145,7 +145,7 @@ istream & write_shm( istream &in , void *address , int box , int size , id &id )
     //Set semaphore
     if( sema_set( id , box ) )
     {
-        cout << "Failed to set semaphore for box: " << box+1 << endl
+        cout << "Failed to set semaphore for box: " << box << endl
              << "Write Terminated." << endl;
     }
 
@@ -217,7 +217,7 @@ ostream & read_shm( ostream &out , void *address , int box , int size , id &id )
     //Check the state of the semaphore
     if ( semctl( id.sem , box , GETVAL , 0 ) ) 
     {
-        cout << "ERROR: Semaphore not unlocked for box: " << box+1
+        cout << "ERROR: Semaphore not unlocked for box: " << box
              << " Read Terminated." << endl;
         return out;
     }
@@ -264,10 +264,62 @@ void copy_shm( void *address , int source , int dest , int size , id &id )
     //Local Variable Declaration
     char *addr = (char*)address;
 
+    //Check the state of the source semaphore
+    if ( semctl( id.sem , source , GETVAL , 0 ) ) 
+    {
+        cout << "ERROR: Semaphore not unlocked for box: " << source << endl
+             << " Copy Terminated" << endl;
+        return;
+    }
+
+    //Set source semaphore
+    if( sema_set( id , source ) )
+    {
+        cout << "Failed to lock semaphore for box: " << box << endl
+             << "Copy Terminated." << endl;
+        return;
+    }
+
+    //Check the state of the destination semaphore
+    if ( semctl( id.sem , dest , GETVAL , 0 ) ) 
+    {
+        cout << "ERROR: Semaphore not unlocked for box: " << box << endl
+             << "Copy Terminated." << endl;
+        return;
+    }
+
+    //Set destination semaphore
+    if( sema_set( id , dest ) )
+    {
+        if( sema_clear( id , source ) )
+        {
+            cout << "Failed to clear Semaphore for box(source): "
+                 << source << endl << "Critical Error." << endl;
+        }
+        cout << "Failed to lock semaphore for box: " << dest << endl
+             << "Copy Terminated." << endl;
+        return;
+    }
+
+    //Perform copy Operation
     for( int i = 0; i < size * 1024; i++ )
     {
-        addr[(dest)*1024 + i] = addr[(source)*1024 + i];
+        addr[(dest)*size*1024 + i] = addr[(source)*size*1024 + i];
     }
+
+    //Clear Source Semaphore
+    if( sema_clear( id , source ) )
+    {
+        cout << "Failed to clear Semaphore for box(source): " << source << endl
+             << "Critical Error." << endl;
+    }
+    //Clear Destination Semaphore
+    if( sema_clear( id , dest ) )
+    {
+        cout << "Failed to clear Semaphore for box(dest): " << dest << endl
+             << "Critical Error." << endl;
+    }
+    return;
 }
 
 //***************************************************************************//
